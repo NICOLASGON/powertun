@@ -36,12 +36,26 @@
 #define BUFSIZE			2000
 #define CLIENT_MODE		0
 #define SERVER_MODE		1
+#define TCP_MODE		0
+#define UDP_MODE		1
+#define TUN_MODE		0
+#define TAP_MODE		1
 #define DEFAULT_PORT	6666
 #define LISTEN_MAX		5
 
+#define OPT_TUN			100
+#define OPT_TAP			101
+#define OPT_TCP			102
+#define OPT_UDP			103
+
 static int verbose = 0;
 static char *program_name = NULL;
-static int mode = SERVER_MODE;
+static int mode     = SERVER_MODE;
+static int nwk_mode = TCP_MODE;
+static int if_mode  = TUN_MODE;
+
+struct sockaddr_in si_other;
+socklen_t slen = sizeof(si_other);
 
 static int tun_alloc(char *dev)
 {
@@ -53,7 +67,11 @@ static int tun_alloc(char *dev)
 
 	memset(&ifr, 0, sizeof(ifr));
 
-	ifr.ifr_flags = IFF_TUN; 
+	if( if_mode == TUN_MODE )
+		ifr.ifr_flags = IFF_TUN;
+	else
+		ifr.ifr_flags = IFF_TAP;
+
 	if( *dev )
 		strncpy(ifr.ifr_name, dev, IFNAMSIZ);
 
@@ -66,37 +84,61 @@ static int tun_alloc(char *dev)
 	return fd;
 }        
 
-static int cread(int fd, char *buf, int n)
+static int cread(int fd, char *buf, int n, int socket_mode)
 {
 	int nread;
 
-	if((nread=read(fd, buf, n)) < 0)
+	if( socket_mode == TCP_MODE )
 	{
-		perror("Reading data");
-		exit(1);
+		if((nread=read(fd, buf, n)) < 0)
+		{
+			perror("TCP Reading data");
+			exit(1);
+		}
 	}
+	else
+	{
+		if((nread=recvfrom(fd, buf, n, 0, (struct sockaddr *) &si_other, &slen)) < 0)
+		{
+			perror("UDP Reading data");
+			exit(1);
+		}
+	}
+
 	return nread;
 }
 
-static int cwrite(int fd, char *buf, int n)
+static int cwrite(int fd, char *buf, int n, int socket_mode)
 {
 	int nwrite;
 
-	if((nwrite=write(fd, buf, n)) < 0)
+	if( nwk_mode == TCP_MODE )
 	{
-		perror("Writing data");
-		exit(1);
+		if((nwrite=write(fd, buf, n)) < 0)
+		{
+			perror("TCP Writing data");
+			exit(1);
+		}
 	}
+	else
+	{
+		if((nwrite=sendto(fd, buf, n, 0, (struct sockaddr*) &si_other, slen)) < 0)
+		{
+			perror("UDP Writing data");
+			exit(1);
+		}
+	}
+
 	return nwrite;
 }
 
-static int read_n(int fd, char *buf, int n)
+static int read_n(int fd, char *buf, int n, int socket_mode)
 {
 	int nread, left = n;
 
 	while(left > 0)
 	{
-		if ((nread = cread(fd, buf, left)) == 0)
+		if ((nread = cread(fd, buf, left, socket_mode)) == 0)
 		{
 			return 0 ;      
 		}
@@ -150,6 +192,10 @@ int main(int argc, char* argv[])
 		{ "server",    0, NULL, 's' },
 		{ "port",      1, NULL, 'p' },
 		{ "verbose",   0, NULL, 'v' },
+		{ "tun",       0, NULL, OPT_TUN },
+		{ "tap",       0, NULL, OPT_TAP },
+		{ "udp",       0, NULL, OPT_UDP },
+		{ "tcp",       0, NULL, OPT_TCP },
 		{ NULL,        0, NULL , 0  }
 	};
 
@@ -175,6 +221,18 @@ int main(int argc, char* argv[])
 			case 'v':
 				verbose = 1;
 				break;
+			case OPT_TCP:
+				nwk_mode = TCP_MODE;
+				break;
+			case OPT_UDP:
+				nwk_mode = UDP_MODE;
+				break;
+			case OPT_TUN:
+				if_mode = TUN_MODE;
+				break;
+			case OPT_TAP:
+				if_mode = TAP_MODE;
+				break;
 			case '?':
 				usage(stderr, 1);
 				break;
@@ -186,16 +244,30 @@ int main(int argc, char* argv[])
 		}
 	} while(next_option != -1);
 
+	if(*tun_name == '\0')
+		error("Must specify interface name!\n");
+
 	/* Allocation of TUN/TAP interface */
 	if( (tunfd = tun_alloc(tun_name)) < 0 )
 	{
 		error("Failed to connect to %s interface.\n", tun_name);
 	}
 
-	if ( (sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+	if( nwk_mode == TCP_MODE )
 	{
-		perror("socket()");
-		exit(1);
+		if ( (sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+		{
+			perror("socket()");
+			exit(1);
+		}
+	}
+	else
+	{
+		if ( (sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
+		{
+			perror("socket()");
+			exit(1);
+		}
 	}
 
 	if(mode == CLIENT_MODE)
@@ -205,10 +277,13 @@ int main(int argc, char* argv[])
 		server.sin_addr.s_addr = inet_addr(server_ip);
 		server.sin_port = htons(port);
 
-		if (connect(sockfd, (struct sockaddr*) &server, sizeof(server)) < 0)
+		if( nwk_mode == TCP_MODE )
 		{
-			perror("connect()");
-			exit(1);
+			if (connect(sockfd, (struct sockaddr*) &server, sizeof(server)) < 0)
+			{
+				perror("connect()");
+				exit(1);
+			}
 		}
 
 		netfd = sockfd;
@@ -231,18 +306,21 @@ int main(int argc, char* argv[])
 			exit(1);
 		}
 
-		if (listen(sockfd, LISTEN_MAX) < 0)
+		if( nwk_mode == TCP_MODE )
 		{
-			perror("listen()");
-			exit(1);
-		}
+			if (listen(sockfd, LISTEN_MAX) < 0)
+			{
+				perror("listen()");
+				exit(1);
+			}
 
-		serverlen = sizeof(server);
-		memset(&server, 0, serverlen);
-		if ((netfd = accept(sockfd, (struct sockaddr*)&server, &serverlen)) < 0)
-		{
-			perror("accept()");
-			exit(1);
+			serverlen = sizeof(server);
+			memset(&server, 0, serverlen);
+			if ((netfd = accept(sockfd, (struct sockaddr*)&server, &serverlen)) < 0)
+			{
+				perror("accept()");
+				exit(1);
+			}
 		}
 	}
 
@@ -271,22 +349,22 @@ int main(int argc, char* argv[])
 		/* Received packet from TUN interface */
 		if(FD_ISSET(tunfd, &rd_set))
 		{  
-			nread = cread(tunfd, buffer, BUFSIZE);
+			nread = cread(tunfd, buffer, BUFSIZE, TCP_MODE);
 
 			plength = htons(nread);
-			nwrite = cwrite(netfd, (char *)&plength, sizeof(plength));
-			nwrite = cwrite(netfd, buffer, nread);
+			nwrite = cwrite(netfd, (char *)&plength, sizeof(plength), nwk_mode);
+			nwrite = cwrite(netfd, buffer, nread, nwk_mode);
 		}
 
 		/* Received packet from the tunnel */
 		if(FD_ISSET(netfd, &rd_set))
 		{
-			nread = read_n(netfd, (char *)&plength, sizeof(plength));
+			nread = read_n(netfd, (char *)&plength, sizeof(plength), nwk_mode);
 			if(nread == 0)
 				break;
 
-			nread  = read_n(netfd, buffer, ntohs(plength));
-			nwrite = cwrite(tunfd, buffer, nread);
+			nread  = read_n(netfd, buffer, ntohs(plength), nwk_mode);
+			nwrite = cwrite(tunfd, buffer, nread, TCP_MODE);
 		}
 	}
 
