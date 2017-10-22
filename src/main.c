@@ -21,11 +21,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <net/if.h>
+#include <sys/socket.h>
 #include <linux/if.h>
 #include <linux/if_tun.h>
 #include <sys/types.h>
-#include <sys/socket.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <fcntl.h>
