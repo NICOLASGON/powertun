@@ -20,18 +20,21 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <errno.h>
-#include <stropts.h>
 #include <unistd.h>
-#include <stdarg.h>
-#include <fcntl.h>
-#include <getopt.h>
+#include <net/if.h>
 #include <linux/if.h>
 #include <linux/if_tun.h>
-#include <sys/ioctl.h>
+#include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <arpa/inet.h> 
 #include <sys/select.h>
-#include <arpa/inet.h>
+#include <sys/time.h>
+#include <errno.h>
+#include <stdarg.h>
+#include <getopt.h>
 
 #define BUFSIZE			2000
 #define CLIENT_MODE		0
